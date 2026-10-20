@@ -40,6 +40,17 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted
+          persist-credentials: false
+      - name: Verify trusted review configuration is bootstrapped
+        run: |
+          test -f trusted/review/prompt.prompt.yml || {
+            echo "::error::Add review/prompt.prompt.yml to the base branch before enabling this workflow."
+            exit 1
+          }
+          test -f trusted/docs/review-standard.md || {
+            echo "::error::Add docs/review-standard.md to the base branch before enabling this workflow."
+            exit 1
+          }
       - name: Fetch pull request diff
         env:
           GH_TOKEN: ${{ github.token }}
