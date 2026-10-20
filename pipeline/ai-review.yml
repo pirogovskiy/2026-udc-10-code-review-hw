@@ -1,0 +1,78 @@
+name: AI review (advisory)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  deterministic-checks:
+    name: Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run tests
+        working-directory: app
+        run: npm test
+
+  ai-review:
+    name: Advisory AI review
+    needs: deterministic-checks
+    # Secrets and comment permission are available only for same-repository PRs.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      models: read
+      pull-requests: read
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+      - name: Install GitHub Copilot CLI
+        run: npm install --global @github/copilot
+      - name: Fetch pull request diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: gh pr diff "$PR_NUMBER" --repo "$REPOSITORY" > review.diff
+      - name: Generate review from the diff
+        id: review
+        uses: actions/ai-inference@v1
+        with:
+          prompt-file: review/prompt.yml
+          file_input: |
+            diff: ${{ github.workspace }}/review.diff
+            standard: ${{ github.workspace }}/docs/review-standard.md
+          model: gpt-4.1
+          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      - name: Post advisory comment
+        uses: actions/github-script@v7
+        env:
+          AI_REVIEW: ${{ steps.review.outputs.response }}
+        with:
+          script: |
+            const body = [
+              '## AI review (advisory)',
+              '',
+              process.env.AI_REVIEW || 'The reviewer returned no response.',
+              '',
+              '_This comment is advisory. A human must review the findings and approve any merge._'
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
